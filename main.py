@@ -4,12 +4,12 @@ from datetime import datetime
 from fetchers import news18, toi, zeenews, ht, indianexpress, ndtv
 
 SOURCES = {
-    "news18": news18,
-    "toi":    toi,
-    "ht":     ht,
-    "zeenews": zeenews, #403
+    # "news18": news18,
+    # "toi":    toi,
+    # "ht":     ht,
     "indianexpress": indianexpress,
-    "ndtv": ndtv #403
+    # "zeenews": zeenews, #403
+    # "ndtv": ndtv #403
 }
 
 def main():

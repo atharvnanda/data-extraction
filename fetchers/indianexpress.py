@@ -2,16 +2,9 @@ import httpx
 from lxml import etree
 import trafilatura
 import re
-from fetchers.news18 import HEADERS, clean
+from fetchers.news18 import NAMESPACES, HEADERS, clean
 
-SITEMAP_URL = "https://indianexpress.com/sitemap/today.xml"  # https://indianexpress.com/news-sitemap.xml
-
-# IE uses different namespace alias for news
-NAMESPACES = {
-    "sm":    "http://www.sitemaps.org/schemas/sitemap/0.9",
-    "n":     "http://www.google.com/schemas/sitemap-news/0.9",
-    "image": "http://www.google.com/schemas/sitemap-image/1.1",
-}
+SITEMAP_URL = "https://indianexpress.com/news-sitemap.xml"
 
 
 def fetch_sitemap(limit: int = 10) -> list[dict]:
@@ -21,7 +14,6 @@ def fetch_sitemap(limit: int = 10) -> list[dict]:
 
     xml_text = re.sub(r"<script[^>]*/?>", "", resp.text)
     root = etree.fromstring(xml_text.encode())
-
     urls = root.findall("sm:url", NAMESPACES)[:limit]
     articles = []
 
@@ -34,47 +26,40 @@ def fetch_sitemap(limit: int = 10) -> list[dict]:
     return articles
 
 
-def fetch_meta(html: str) -> dict:
-    """Extract SEO meta tags from article HTML."""
-    try:
-        tree = etree.fromstring(html.encode(), etree.HTMLParser())
-        def meta(name_attr, name_val):
-            el = tree.find(f'.//meta[@{name_attr}="{name_val}"]')
-            return clean(el.get("content", "")) if el is not None else ""
-
-        return {
-            "keywords":    meta("name", "keywords"),
-            "description": meta("name", "description"),
-            "og_title":    meta("property", "og:title"),
-        }
-    except Exception:
-        return {"keywords": "", "description": "", "og_title": ""}
-
-
 def parse_url_element(url_el, client: httpx.Client) -> dict | None:
     loc     = clean(url_el.findtext("sm:loc",     namespaces=NAMESPACES))
     lastmod = clean(url_el.findtext("sm:lastmod", namespaces=NAMESPACES))
 
-    html    = ""
-    content = ""
-    meta    = {}
+    news_el = url_el.find("news:news", NAMESPACES)
+    pub_el  = news_el.find("news:publication", NAMESPACES) if news_el is not None else None
 
+    name     = clean(pub_el.findtext("news:name",     namespaces=NAMESPACES)) if pub_el  else ""
+    language = clean(pub_el.findtext("news:language", namespaces=NAMESPACES)) if pub_el  else ""
+    pub_date = clean(news_el.findtext("news:publication_date", namespaces=NAMESPACES)) if news_el else ""
+    title    = clean(news_el.findtext("news:title",    namespaces=NAMESPACES)) if news_el else ""
+    keywords = clean(news_el.findtext("news:keywords", namespaces=NAMESPACES)) if news_el else ""
+
+    image_el  = url_el.find("image:image", NAMESPACES)
+    image_loc = clean(image_el.findtext("image:loc", namespaces=NAMESPACES)) if image_el is not None else ""
+
+    content = ""
     if loc:
         try:
             resp    = client.get(loc)
-            html    = resp.text
-            content = trafilatura.extract(html) or ""
-            meta    = fetch_meta(html)
+            content = trafilatura.extract(resp.text) or ""
         except Exception as e:
             content = f"[fetch error: {e}]"
 
     return {
         "url_loc": loc,
         "lastmod": lastmod,
-        "meta": {
-            "keywords":    [k.strip() for k in meta.get("keywords", "").split(",") if k.strip()],
-            "description": meta.get("description", ""),
-            "og_title":    meta.get("og_title", ""),
+        "news": {
+            "name":             name,
+            "language":         language,
+            "publication_date": pub_date,
+            "title":            title,
+            "keywords":         [k.strip() for k in keywords.split(",") if k.strip()],
         },
-        "content": content,
+        "image_loc": image_loc,
+        "content":   content,
     }
