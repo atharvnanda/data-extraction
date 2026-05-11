@@ -1,12 +1,13 @@
 import json
 import os
 from datetime import datetime
-from fetchers import news18, toi, zeenews
+from fetchers import news18, toi, zeenews, ht
 
 SOURCES = {
     # "news18": news18,
     # "toi":    toi,
-    "zeenews": zeenews,
+    "ht":     ht,
+    # "zeenews": zeenews,
 }
 
 def main():
