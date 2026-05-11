@@ -1,19 +1,25 @@
 import json
 import os
 from datetime import datetime
-from fetchers.news18 import fetch_sitemap
+from fetchers import news18, toi, zeenews
+
+SOURCES = {
+    # "news18": news18,
+    # "toi":    toi,
+    "zeenews": zeenews,
+}
 
 def main():
-    print("Fetching News18 sitemap...")
-    articles = fetch_sitemap(limit=10)
-
     os.makedirs("output", exist_ok=True)
-    filename = f"output/news18_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(articles, f, ensure_ascii=False, indent=2)
-
-    print(f"Saved {len(articles)} articles → {filename}")
+    for name, fetcher in SOURCES.items():
+        print(f"Fetching {name}...")
+        articles = fetcher.fetch_sitemap(limit=10)
+        filename = f"output/{name}_{timestamp}.json"
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(articles, f, ensure_ascii=False, indent=2)
+        print(f"  Saved {len(articles)} articles → {filename}")
 
 if __name__ == "__main__":
     main()
