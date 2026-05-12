@@ -4,9 +4,9 @@ from datetime import datetime
 from fetchers import news18, toi, zeenews, ht, indianexpress, ndtv
 
 SOURCES = {
-    # "news18": news18,
-    # "toi":    toi,
-    # "ht":     ht,
+    "news18": news18,
+    "toi":    toi,
+    "ht":     ht,
     "indianexpress": indianexpress,
     # "zeenews": zeenews, #403
     # "ndtv": ndtv #403
