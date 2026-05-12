@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 import re
 
-SITEMAP_URL = "https://timesofindia.indiatimes.com/sitemap/today"
+SITEMAP_URL = "https://timesofindia.indiatimes.com/staticsitemap/toi/news/sitemap-today-1.xml" #"https://timesofindia.indiatimes.com/sitemap/today"
 
 NAMESPACES = {
     "sm":    "http://www.sitemaps.org/schemas/sitemap/0.9",

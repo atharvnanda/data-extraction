@@ -17,7 +17,15 @@ COSINE_THRESHOLD  = 0.18   # distance, not similarity (1 - 0.82)
 
 
 def get_conn():
-    return psycopg2.connect(os.environ["SUPABASE_DB_URL"])
+    return psycopg2.connect(
+        host=os.environ["SUPABASE_HOST"],
+        port=os.environ["SUPABASE_PORT"],
+        dbname=os.environ["SUPABASE_DB"],
+        user=os.environ["SUPABASE_USER"],
+        password=os.environ["SUPABASE_PASSWORD"],
+        sslmode="require"
+    )
+    print("Connected to Supabase!")
 
 
 # ── Jaccard ──────────────────────────────────────────────────────────────────
@@ -32,7 +40,7 @@ def jaccard(a: list[str], b: list[str]) -> float:
 def build_jaccard_keywords(article: dict) -> list[str]:
     keywords = article.get("news", {}).get("keywords", []) or []
     if not keywords:
-        desc = (article.get("meta", {}) or {}).get("description", "") or ""
+        desc = (article.get("meta", {}) or {}).get("keywords", "") or ""
         keywords = desc.replace(",", " ").split()
     return list(set(
         w.lower() for w in keywords if len(w) > 3
@@ -139,7 +147,7 @@ def insert_article(conn, article: dict, source_key: str,
         cur.execute("""
             insert into articles (
                 source_id, group_id, url_loc, lastmod, publication_date,
-                title, keywords, jaccard_keywords, meta_description,
+                title, keywords, jaccard_keywords, meta_keywords,
                 image_loc, content, embedding
             ) values (
                 %s, %s, %s, %s::timestamptz, %s::timestamptz,
@@ -156,7 +164,7 @@ def insert_article(conn, article: dict, source_key: str,
             news.get("title"),
             news.get("keywords") or [],
             jaccard_kws,
-            meta.get("description") or "",
+            meta.get("keywords") or "",
             article.get("image_loc"),
             article.get("content"),
             embedding,
