@@ -64,21 +64,21 @@ def parse_url_element(url_el, client: httpx.Client) -> dict | None:
     keywords_clean = re.sub(r"[^\x00-\x7F]+", "", keywords_raw)
 
     # add this function to each fetcher file
-    def fetch_meta_description(html: str) -> str:
+    def fetch_meta_keywords(html: str) -> str:
         try:
             tree = etree.fromstring(html.encode(), etree.HTMLParser())
-            el = tree.find('.//meta[@name="description"]')
+            el = tree.find('.//meta[@name="keywords"]')
             return el.get("content", "").strip() if el is not None else ""
         except Exception:
             return ""
 
     content = ""
-    meta_description = ""
+    meta_keywords = ""
     if loc:
         try:
             resp    = client.get(loc)
             content = trafilatura.extract(resp.text) or ""
-            meta_description = fetch_meta_description(resp.text)
+            meta_keywords = fetch_meta_keywords(resp.text)
         except Exception as e:
             content = f"[fetch error: {e}]"
 
@@ -94,7 +94,7 @@ def parse_url_element(url_el, client: httpx.Client) -> dict | None:
         },
         "image_loc": None,        # not present in Zee News sitemap
         "meta": {
-            "description": meta_description,
+            "keywords": meta_keywords,
         },
         "content":   content,
     }

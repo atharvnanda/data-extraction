@@ -65,22 +65,22 @@ def parse_url_element(url_el, client: httpx.Client) -> dict | None:
     image_el  = url_el.find("image:image", NAMESPACES)
     image_loc = clean(image_el.findtext("image:loc", namespaces=NAMESPACES)) if image_el is not None else ""
 
-    def fetch_meta_description(html: str) -> str:
+    def fetch_meta_keywords(html: str) -> str:
         try:
             tree = etree.fromstring(html.encode(), etree.HTMLParser())
-            el = tree.find('.//meta[@name="description"]')
+            el = tree.find('.//meta[@name="keywords"]')
             return el.get("content", "").strip() if el is not None else ""
         except Exception:
             return ""
 
     # Scrape article body
     content = ""
-    meta_description = ""
+    meta_keywords = ""
     if loc:
         try:
             resp = client.get(loc)
             content = trafilatura.extract(resp.text) or ""
-            meta_description = fetch_meta_description(resp.text)
+            meta_keywords = fetch_meta_keywords(resp.text)
         except Exception as e:
             content = f"[fetch error: {e}]"
 
@@ -96,7 +96,7 @@ def parse_url_element(url_el, client: httpx.Client) -> dict | None:
         },
         "image_loc": image_loc,
         "meta": {
-            "description": meta_description,
+            "keywords": meta_keywords,
         },
         "content":   content,
     }
