@@ -63,11 +63,22 @@ def parse_url_element(url_el, client: httpx.Client) -> dict | None:
     # Zee injects garbage encoding artifacts (e.g. "Â") — strip them
     keywords_clean = re.sub(r"[^\x00-\x7F]+", "", keywords_raw)
 
+    # add this function to each fetcher file
+    def fetch_meta_description(html: str) -> str:
+        try:
+            tree = etree.fromstring(html.encode(), etree.HTMLParser())
+            el = tree.find('.//meta[@name="description"]')
+            return el.get("content", "").strip() if el is not None else ""
+        except Exception:
+            return ""
+
     content = ""
+    meta_description = ""
     if loc:
         try:
             resp    = client.get(loc)
             content = trafilatura.extract(resp.text) or ""
+            meta_description = fetch_meta_description(resp.text)
         except Exception as e:
             content = f"[fetch error: {e}]"
 
@@ -82,5 +93,8 @@ def parse_url_element(url_el, client: httpx.Client) -> dict | None:
             "keywords":         [k.strip() for k in keywords_clean.split(",") if k.strip()],
         },
         "image_loc": None,        # not present in Zee News sitemap
+        "meta": {
+            "description": meta_description,
+        },
         "content":   content,
     }
