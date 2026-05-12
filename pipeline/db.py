@@ -1,4 +1,5 @@
 import os
+import re
 import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
@@ -12,8 +13,8 @@ SOURCE_IDS = {
     "indianexpress": 4,
 }
 
-JACCARD_THRESHOLD = 0.3
-COSINE_THRESHOLD  = 0.18   # distance, not similarity (1 - 0.82)
+JACCARD_THRESHOLD = 0.1
+COSINE_THRESHOLD  = 0.3   # distance, not similarity (1 - 0.7)
 
 
 def get_conn():
@@ -38,12 +39,27 @@ def jaccard(a: list[str], b: list[str]) -> float:
 
 
 def build_jaccard_keywords(article: dict) -> list[str]:
-    keywords = article.get("news", {}).get("keywords", []) or []
-    if not keywords:
-        desc = (article.get("meta", {}) or {}).get("keywords", "") or ""
-        keywords = desc.replace(",", " ").split()
+    # 1. Gather raw keywords from news source and meta
+    news_kws = article.get("news", {}).get("keywords") or []
+    meta_kws_str = (article.get("meta") or {}).get("keywords") or ""
+    meta_kws = [k.strip() for k in meta_kws_str.replace(",", " ").split() if k.strip()]
+    
+    # 2. Include Title words (Crucial for news matching)
+    title = (article.get("news") or {}).get("title") or ""
+    title_words = re.split(r"[\W_]+", title)
+    
+    combined = news_kws + meta_kws + title_words
+    
+    # 3. Flatten phrases into words and normalize
+    final_words = []
+    for item in combined:
+        # Split on spaces, dashes, underscores
+        parts = re.split(r"[\s\-_,]+", item)
+        final_words.extend(parts)
+        
     return list(set(
-        w.lower() for w in keywords if len(w) > 3
+        w.lower() for w in final_words 
+        if len(w) > 3
     ))
 
 
@@ -57,13 +73,18 @@ def url_exists(conn, url: str) -> bool:
 
 # ── Group matching ────────────────────────────────────────────────────────────
 
-def find_matching_group(conn, jaccard_kws: list[str], embedding: list[float]) -> int | None:
+def find_matching_group(conn, jaccard_kws: list[str], embedding: list[float]) -> tuple[int | None, dict]:
     """
-    1. Pull all active groups with their group_keywords.
-    2. Jaccard pre-filter (Python side — groups are few).
-    3. Vector similarity on survivors (DB side).
-    Returns group_id or None.
+    1. Pull all active groups.
+    2. Jaccard pre-filter.
+    3. Vector similarity on survivors.
+    Returns (group_id, debug_data).
     """
+    debug_data = {
+        "jaccard_phase": {"threshold": JACCARD_THRESHOLD, "top_matches": [], "candidate_ids": []},
+        "vector_phase": {"performed": False, "threshold": COSINE_THRESHOLD, "best_match": None}
+    }
+
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute("""
             select id, group_keywords
@@ -72,37 +93,41 @@ def find_matching_group(conn, jaccard_kws: list[str], embedding: list[float]) ->
         """)
         active_groups = cur.fetchall()
 
-    candidates = [
-        g["id"] for g in active_groups
-        if jaccard(jaccard_kws, g["group_keywords"] or []) >= JACCARD_THRESHOLD
-    ]
+    scores = []
+    for g in active_groups:
+        score = jaccard(jaccard_kws, g["group_keywords"] or [])
+        if score > 0:
+            scores.append({"group_id": g["id"], "score": round(score, 4)})
+        if score >= JACCARD_THRESHOLD:
+            debug_data["jaccard_phase"]["candidate_ids"].append(g["id"])
 
-    if not candidates:
-        return None
+    # Keep top 5 jaccard matches for logs
+    debug_data["jaccard_phase"]["top_matches"] = sorted(scores, key=lambda x: x["score"], reverse=True)[:5]
 
+    if not debug_data["jaccard_phase"]["candidate_ids"]:
+        return None, debug_data
+
+    debug_data["vector_phase"]["performed"] = True
     with conn.cursor() as cur:
         cur.execute("""
-            select id
+            select id, centroid <=> %s::vector as dist
             from article_groups
             where id = any(%s)
-            order by centroid <=> %s::vector
+            order by dist
             limit 1
-        """, (candidates, embedding))
+        """, (embedding, debug_data["jaccard_phase"]["candidate_ids"]))
         row = cur.fetchone()
 
     if not row:
-        return None
+        return None, debug_data
 
-    # verify cosine distance is within threshold
-    with conn.cursor() as cur:
-        cur.execute("""
-            select centroid <=> %s::vector as dist
-            from article_groups
-            where id = %s
-        """, (embedding, row[0]))
-        dist = cur.fetchone()[0]
+    group_id, dist = row
+    debug_data["vector_phase"]["best_match"] = {"group_id": group_id, "distance": round(float(dist), 4)}
 
-    return row[0] if dist < COSINE_THRESHOLD else None
+    if dist < COSINE_THRESHOLD:
+        return group_id, debug_data
+    
+    return None, debug_data
 
 
 def update_group(conn, group_id: int, embedding: list[float], jaccard_kws: list[str]):
