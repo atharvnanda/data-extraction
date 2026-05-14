@@ -76,6 +76,10 @@ def parse_url_element(url_el, session: cffi_requests.Session) -> dict | None:
         except Exception as e:
             content = f"[fetch error: {e}]"
 
+    # Fallback: use og:title if sitemap title is missing
+    if not title:
+        title = meta.get("og_title", "")
+
     return {
         "url_loc": loc,
         "lastmod": lastmod,

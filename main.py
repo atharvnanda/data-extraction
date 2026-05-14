@@ -9,10 +9,10 @@ from pipeline.db import (
 )
 
 SOURCES = {
-    # "news18": news18,
-    # "toi":    toi,
-    # "ht":     ht,
-    # "indianexpress": indianexpress,
+    "news18": news18,
+    "toi":    toi,
+    "ht":     ht,
+    "indianexpress": indianexpress,
     "zeenews": zeenews, #403
     "ndtv": ndtv #403
 }
