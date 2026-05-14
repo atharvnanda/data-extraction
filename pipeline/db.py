@@ -15,7 +15,7 @@ SOURCE_IDS = {
 }
 
 JACCARD_THRESHOLD = 0.1
-COSINE_THRESHOLD  = 0.3   # distance for single-article groups (sim >= 0.7)
+COSINE_THRESHOLD  = 0.33   # distance for single-article groups (sim >= 0.7)
 COSINE_THRESHOLD_GROUPED = 0.4   # relaxed for multi-article groups (sim >= 0.6)
 
 
