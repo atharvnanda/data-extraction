@@ -15,7 +15,8 @@ SOURCE_IDS = {
 }
 
 JACCARD_THRESHOLD = 0.1
-COSINE_THRESHOLD  = 0.3   # distance, not similarity (1 - 0.7)
+COSINE_THRESHOLD  = 0.3   # distance for single-article groups (sim >= 0.7)
+COSINE_THRESHOLD_GROUPED = 0.4   # relaxed for multi-article groups (sim >= 0.6)
 
 
 def get_conn():
@@ -83,16 +84,19 @@ def find_matching_group(conn, jaccard_kws: list[str], embedding: list[float]) ->
     """
     debug_data = {
         "jaccard_phase": {"threshold": JACCARD_THRESHOLD, "top_matches": [], "candidate_ids": []},
-        "vector_phase": {"performed": False, "threshold": COSINE_THRESHOLD, "best_match": None}
+        "vector_phase": {"performed": False, "threshold_single": COSINE_THRESHOLD, "threshold_grouped": COSINE_THRESHOLD_GROUPED, "best_match": None}
     }
 
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute("""
-            select id, group_keywords
+            select id, group_keywords, article_count
             from article_groups
             where expires_at > now()
         """)
         active_groups = cur.fetchall()
+
+    # Build a lookup for article_count per group
+    group_counts = {g["id"]: g["article_count"] for g in active_groups}
 
     scores = []
     for g in active_groups:
@@ -123,9 +127,17 @@ def find_matching_group(conn, jaccard_kws: list[str], embedding: list[float]) ->
         return None, debug_data
 
     group_id, dist = row
-    debug_data["vector_phase"]["best_match"] = {"group_id": group_id, "distance": round(float(dist), 4)}
+    count = group_counts.get(group_id, 1)
+    effective_threshold = COSINE_THRESHOLD_GROUPED if count > 1 else COSINE_THRESHOLD
 
-    if dist < COSINE_THRESHOLD:
+    debug_data["vector_phase"]["best_match"] = {
+        "group_id": group_id,
+        "distance": round(float(dist), 4),
+        "group_article_count": count,
+        "effective_threshold": effective_threshold
+    }
+
+    if dist < effective_threshold:
         return group_id, debug_data
     
     return None, debug_data
