@@ -2,6 +2,7 @@ import os
 import re
 import psycopg2
 import psycopg2.extras
+import json
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -132,9 +133,19 @@ def find_matching_group(conn, jaccard_kws: list[str], embedding: list[float]) ->
 
 def update_group(conn, group_id: int, embedding: list[float], jaccard_kws: list[str]):
     with conn.cursor() as cur:
+        cur.execute("select centroid, article_count from article_groups where id = %s", (group_id,))
+        row = cur.fetchone()
+        old_centroid = row[0]  # comes back as list
+        if isinstance(old_centroid, str):
+            old_centroid = json.loads(old_centroid)
+        n = row[1]
+
+    new_centroid = [(old_centroid[i] * n + embedding[i]) / (n + 1) for i in range(len(embedding))]
+
+    with conn.cursor() as cur:
         cur.execute("""
             update article_groups set
-                centroid        = ((centroid * article_count) + %s::vector) / (article_count + 1),
+                centroid        = %s::vector,
                 article_count   = article_count + 1,
                 group_keywords  = (
                     select array_agg(distinct kw)
@@ -143,7 +154,7 @@ def update_group(conn, group_id: int, embedding: list[float], jaccard_kws: list[
                 last_updated_at = now(),
                 expires_at      = now() + interval '48 hours'
             where id = %s
-        """, (embedding, jaccard_kws, group_id))
+        """, (new_centroid, jaccard_kws, group_id))
     conn.commit()
 
 

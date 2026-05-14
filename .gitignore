@@ -1,5 +1,12 @@
+
+#Default
 venv/
 __pycache__/
-output/
 .env
+
+#Redundant Directories
 logs/
+output/
+
+#Final output sample
+group_sample.json  
