@@ -2,7 +2,6 @@ import os
 import re
 import psycopg2
 import psycopg2.extras
-import json
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -15,8 +14,7 @@ SOURCE_IDS = {
 }
 
 JACCARD_THRESHOLD = 0.1
-COSINE_THRESHOLD  = 0.33   # distance for single-article groups (sim >= 0.7)
-COSINE_THRESHOLD_GROUPED = 0.4   # relaxed for multi-article groups (sim >= 0.6)
+COSINE_THRESHOLD  = 0.33   # cosine distance (similarity >= 0.67)
 
 
 def get_conn():
@@ -84,19 +82,16 @@ def find_matching_group(conn, jaccard_kws: list[str], embedding: list[float]) ->
     """
     debug_data = {
         "jaccard_phase": {"threshold": JACCARD_THRESHOLD, "top_matches": [], "candidate_ids": []},
-        "vector_phase": {"performed": False, "threshold_single": COSINE_THRESHOLD, "threshold_grouped": COSINE_THRESHOLD_GROUPED, "best_match": None}
+        "vector_phase": {"performed": False, "threshold": COSINE_THRESHOLD, "best_match": None}
     }
 
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute("""
-            select id, group_keywords, article_count
+            select id, group_keywords
             from article_groups
             where expires_at > now()
         """)
         active_groups = cur.fetchall()
-
-    # Build a lookup for article_count per group
-    group_counts = {g["id"]: g["article_count"] for g in active_groups}
 
     scores = []
     for g in active_groups:
@@ -112,10 +107,11 @@ def find_matching_group(conn, jaccard_kws: list[str], embedding: list[float]) ->
     if not debug_data["jaccard_phase"]["candidate_ids"]:
         return None, debug_data
 
+    # Vector check against anchor embedding (immutable, no drift)
     debug_data["vector_phase"]["performed"] = True
     with conn.cursor() as cur:
         cur.execute("""
-            select id, centroid <=> %s::vector as dist
+            select id, anchor_embedding <=> %s::vector as dist
             from article_groups
             where id = any(%s)
             order by dist
@@ -127,37 +123,22 @@ def find_matching_group(conn, jaccard_kws: list[str], embedding: list[float]) ->
         return None, debug_data
 
     group_id, dist = row
-    count = group_counts.get(group_id, 1)
-    effective_threshold = COSINE_THRESHOLD_GROUPED if count > 1 else COSINE_THRESHOLD
-
     debug_data["vector_phase"]["best_match"] = {
         "group_id": group_id,
-        "distance": round(float(dist), 4),
-        "group_article_count": count,
-        "effective_threshold": effective_threshold
+        "distance": round(float(dist), 4)
     }
 
-    if dist < effective_threshold:
+    if dist < COSINE_THRESHOLD:
         return group_id, debug_data
     
     return None, debug_data
 
 
-def update_group(conn, group_id: int, embedding: list[float], jaccard_kws: list[str]):
-    with conn.cursor() as cur:
-        cur.execute("select centroid, article_count from article_groups where id = %s", (group_id,))
-        row = cur.fetchone()
-        old_centroid = row[0]  # comes back as list
-        if isinstance(old_centroid, str):
-            old_centroid = json.loads(old_centroid)
-        n = row[1]
-
-    new_centroid = [(old_centroid[i] * n + embedding[i]) / (n + 1) for i in range(len(embedding))]
-
+def update_group(conn, group_id: int, jaccard_kws: list[str]):
+    """Update group metadata. Anchor embedding is never modified."""
     with conn.cursor() as cur:
         cur.execute("""
             update article_groups set
-                centroid        = %s::vector,
                 article_count   = article_count + 1,
                 group_keywords  = (
                     select array_agg(distinct kw)
@@ -166,15 +147,16 @@ def update_group(conn, group_id: int, embedding: list[float], jaccard_kws: list[
                 last_updated_at = now(),
                 expires_at      = now() + interval '48 hours'
             where id = %s
-        """, (new_centroid, jaccard_kws, group_id))
+        """, (jaccard_kws, group_id))
     conn.commit()
 
 
 def create_group(conn, embedding: list[float], jaccard_kws: list[str]) -> int:
+    """Create a new group. The first article's embedding becomes the immutable anchor."""
     with conn.cursor() as cur:
         cur.execute("""
             insert into article_groups
-                (centroid, group_keywords, article_count, expires_at)
+                (anchor_embedding, group_keywords, article_count, expires_at)
             values
                 (%s::vector, %s, 1, now() + interval '48 hours')
             returning id

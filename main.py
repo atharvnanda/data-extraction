@@ -10,7 +10,7 @@ from pipeline.db import (
 
 SOURCES = {
     "news18": news18,
-    # "toi":    toi,
+    "toi":    toi,
     "ht":     ht,
     # "indianexpress": indianexpress,
     # "zeenews": zeenews, #403
@@ -33,7 +33,7 @@ def process_article(conn, article: dict, source_key: str, run_report: list):
     
     action = "new_group"
     if group_id:
-        update_group(conn, group_id, embedding, jaccard_kws)
+        update_group(conn, group_id, jaccard_kws)
         print(f"    grouped → {group_id}: {article.get('news', {}).get('title', '')[:60]}")
         action = "grouped"
     else:
