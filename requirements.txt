@@ -5,3 +5,4 @@ playwright
 cohere
 psycopg2-binary
 python-dotenv
+curl_cffi

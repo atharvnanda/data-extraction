@@ -11,6 +11,8 @@ SOURCE_IDS = {
     "toi":           2,
     "ht":            3,
     "indianexpress": 4,
+    "zeenews":       6,
+    "ndtv":          7,
 }
 
 JACCARD_THRESHOLD = 0.1
@@ -173,6 +175,9 @@ def insert_article(conn, article: dict, source_key: str,
     news = article.get("news", {}) or {}
     meta = article.get("meta", {}) or {}
 
+    # Postgres can't cast '' to timestamptz — convert to None
+    nullif = lambda v: v if v else None
+
     with conn.cursor() as cur:
         cur.execute("""
             insert into articles (
@@ -189,8 +194,8 @@ def insert_article(conn, article: dict, source_key: str,
             SOURCE_IDS[source_key],
             group_id,
             article.get("url_loc"),
-            article.get("lastmod"),
-            news.get("publication_date"),
+            nullif(article.get("lastmod")),
+            nullif(news.get("publication_date")),
             news.get("title"),
             news.get("keywords") or [],
             jaccard_kws,

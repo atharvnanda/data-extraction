@@ -1,9 +1,9 @@
-import httpx
+from curl_cffi import requests as cffi_requests
 from lxml import etree
 import trafilatura
 import re
 from datetime import datetime
-from fetchers.news18 import HEADERS, clean
+from fetchers.news18 import clean
 
 NAMESPACES = {
     "sm":    "http://www.sitemaps.org/schemas/sitemap/0.9",
@@ -34,24 +34,23 @@ def fetch_meta(html: str) -> dict:
 
 def fetch_sitemap(limit: int = 10) -> list[dict]:
     url = get_sitemap_url()
-    with httpx.Client(headers=HEADERS, timeout=30, follow_redirects=True) as client:
-        resp = client.get(url)
+    with cffi_requests.Session(impersonate="chrome120") as session:
+        resp = session.get(url, timeout=30)
         resp.raise_for_status()
 
-    xml_text = re.sub(r"<script[^>]*/?>", "", resp.text)
-    root = etree.fromstring(xml_text.encode())
-    urls = root.findall("sm:url", NAMESPACES)[:limit]
-    articles = []
+        xml_text = re.sub(r"<script[^>]*/?>", "", resp.text)
+        root = etree.fromstring(xml_text.encode())
+        urls = root.findall("sm:url", NAMESPACES)[:limit]
+        articles = []
 
-    with httpx.Client(headers=HEADERS, timeout=30, follow_redirects=True) as client:
         for url_el in urls:
-            entry = parse_url_element(url_el, client)
+            entry = parse_url_element(url_el, session)
             if entry:
                 articles.append(entry)
 
     return articles
 
-def parse_url_element(url_el, client: httpx.Client) -> dict | None:
+def parse_url_element(url_el, session: cffi_requests.Session) -> dict | None:
     loc     = clean(url_el.findtext("sm:loc",     namespaces=NAMESPACES))
     lastmod = clean(url_el.findtext("sm:lastmod", namespaces=NAMESPACES))
 
@@ -70,7 +69,7 @@ def parse_url_element(url_el, client: httpx.Client) -> dict | None:
     content, meta = "", {}
     if loc:
         try:
-            resp    = client.get(loc)
+            resp    = session.get(loc, timeout=30)
             html    = resp.text
             content = trafilatura.extract(html) or ""
             meta    = fetch_meta(html)
@@ -90,7 +89,7 @@ def parse_url_element(url_el, client: httpx.Client) -> dict | None:
         "image_loc": image_loc,
         "meta": {
             "description": meta.get("description", ""),
-            "keywords":    [k.strip() for k in meta.get("keywords", "").split(",") if k.strip()],
+            "keywords":    meta.get("keywords", ""),
             "og_title":    meta.get("og_title", ""),
         },
         "content": content,

@@ -9,12 +9,12 @@ from pipeline.db import (
 )
 
 SOURCES = {
-    "news18": news18,
-    "toi":    toi,
-    "ht":     ht,
+    # "news18": news18,
+    # "toi":    toi,
+    # "ht":     ht,
     # "indianexpress": indianexpress,
-    # "zeenews": zeenews, #403
-    # "ndtv": ndtv #403
+    "zeenews": zeenews, #403
+    "ndtv": ndtv #403
 }
 
 def process_article(conn, article: dict, source_key: str, run_report: list):
@@ -79,6 +79,7 @@ def main():
                 try:
                     process_article(conn, article, source_key, run_report)
                 except Exception as e:
+                    conn.rollback()
                     print(f"  pipeline error: {e}")
         
         # Save logs
