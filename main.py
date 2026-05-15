@@ -13,8 +13,8 @@ SOURCES = {
     "toi":    toi,
     "ht":     ht,
     "indianexpress": indianexpress,
-    "zeenews": zeenews, #403
-    "ndtv": ndtv #403
+    "zeenews": zeenews, 
+    "ndtv": ndtv 
 }
 
 def process_article(sb, article: dict, source_key: str, run_report: list):
