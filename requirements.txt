@@ -1,7 +1,6 @@
 httpx
 lxml
 trafilatura
-playwright
 cohere
 psycopg2-binary
 python-dotenv
