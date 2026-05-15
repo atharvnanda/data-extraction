@@ -89,22 +89,15 @@ Checks if the database is reachable.
   }
   ```
 
-### 2. Trigger Pipeline Run
-Executes the extraction script.
+### 2. Full Pipeline Run ( MAIN )
+Executes the extraction script for all available sources.
 - **Method:** `POST`
 - **URL:** `/api/v1/pipeline/run`
 - **Sample Request:**
   ```bash
   curl -X POST http://localhost:8000/api/v1/pipeline/run \
        -H "Content-Type: application/json" \
-       -d '{"sources": ["ndtv"], "limit": 10}'
-  ```
-- **Input JSON Format (Optional):**
-  ```json
-  {
-    "sources": ["news18", "toi", "ht", "indianexpress", "zeenews", "ndtv"],
-    "limit": 10
-  }
+       -d '{}'
   ```
 - **Output JSON Format:**
   ```json
@@ -113,28 +106,58 @@ Executes the extraction script.
     "started_at": "...",
     "finished_at": "...",
     "duration_seconds": 15.5,
-    "sources_processed": ["ndtv"],
+    "sources_processed": ["news18", "toi", "ht", "indianexpress", "zeenews", "ndtv"],
     "sources_failed": [],
     "summary": {
-      "total_fetched": 10,
-      "total_inserted": 5,
-      "total_skipped_duplicate": 5,
+      "total_fetched": 60,
+      "total_inserted": 25,
+      "total_skipped_duplicate": 35,
       "total_errors": 0,
-      "new_groups_created": 2,
-      "articles_grouped": 3
+      "new_groups_created": 5,
+      "articles_grouped": 20
     },
     "log_file": "logs/20260515_100000.json",
     "per_source": { }
   }
   ```
 
-### 3. List Past Pipeline Runs
-Retrieves a paginated list of all log files.
-- **Method:** `GET`
-- **URL:** `/api/v1/pipeline/runs?limit=10&page=1`
+### 3. Custom Pipeline Run
+Executes the extraction script for only specific sources or with a specific limit.
+- **Method:** `POST`
+- **URL:** `/api/v1/pipeline/run`
 - **Sample Request:**
   ```bash
-  curl -X GET "http://localhost:8000/api/v1/pipeline/runs?limit=10&page=1"
+  curl -X POST http://localhost:8000/api/v1/pipeline/run \
+       -H "Content-Type: application/json" \
+       -d '{"sources": ["ndtv"], "limit": 10}'
+  ```
+- **Input JSON Format:**
+  ```json
+  {
+    "sources": ["ndtv", "zeenews"],
+    "limit": 10
+  }
+  ```
+- **Output JSON Format:**
+  ```json
+  {
+    "run_id": "20260515_100000",
+    "started_at": "...",
+    "duration_seconds": 5.5,
+    "sources_processed": ["ndtv", "zeenews"],
+    "summary": { "..." },
+    "log_file": "logs/20260515_100000.json",
+    "per_source": { }
+  }
+  ```
+
+### 4. List Logs
+Retrieves a paginated list of all past extraction log files.
+- **Method:** `GET`
+- **URL:** `/api/v1/pipeline/runs` *(Query params `?limit=10&page=1` are optional)*
+- **Sample Request:**
+  ```bash
+  curl -X GET http://localhost:8000/api/v1/pipeline/runs
   ```
 - **Output JSON Format:**
   ```json
@@ -150,7 +173,7 @@ Retrieves a paginated list of all log files.
   }
   ```
 
-### 4. Fetch Specific Pipeline Run
+### 5. List Specific Log - run_id
 Retrieves the full JSON report for a single extraction run.
 - **Method:** `GET`
 - **URL:** `/api/v1/pipeline/runs/{run_id}`
@@ -170,13 +193,13 @@ Retrieves the full JSON report for a single extraction run.
   ]
   ```
 
-### 5. List Grouped Articles (MAIN)
+### 6. Fetch Groups of Articles ( MAIN )
 Primary endpoint for the UI. Retrieves active clustered groups sorted by most recently updated.
 - **Method:** `GET`
-- **URL:** `/api/v1/articles/groups?limit=20&page=1&active_only=true`
+- **URL:** `/api/v1/articles/groups` *(Query params `?limit=20&page=1&active_only=true` are optional)*
 - **Sample Request:**
   ```bash
-  curl -X GET "http://localhost:8000/api/v1/articles/groups?limit=20"
+  curl -X GET http://localhost:8000/api/v1/articles/groups
   ```
 - **Output JSON Format:**
   ```json
@@ -206,7 +229,7 @@ Primary endpoint for the UI. Retrieves active clustered groups sorted by most re
   }
   ```
 
-### 6. View Single Group
+### 7. Fetch Specific Group
 Expand a single group to see all of its associated articles.
 - **Method:** `GET`
 - **URL:** `/api/v1/articles/groups/{group_id}`
@@ -235,13 +258,13 @@ Expand a single group to see all of its associated articles.
   }
   ```
 
-### 7. Raw Article Search/Filter
+### 8. Raw Article Search Filter
 Secondary endpoint to query all stored articles individually with filtering.
 - **Method:** `GET`
-- **URL:** `/api/v1/articles?source=news18&limit=10&page=1`
+- **URL:** `/api/v1/articles` *(Query params `?source=news18&limit=10&page=1` are optional)*
 - **Sample Request:**
   ```bash
-  curl -X GET "http://localhost:8000/api/v1/articles?source=news18"
+  curl -X GET http://localhost:8000/api/v1/articles
   ```
 - **Output JSON Format:**
   ```json
