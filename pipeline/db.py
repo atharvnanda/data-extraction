@@ -1,7 +1,6 @@
 import os
 import re
-import psycopg2
-import psycopg2.extras
+from supabase import create_client
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -19,16 +18,12 @@ JACCARD_THRESHOLD = 0.1
 COSINE_THRESHOLD  = 0.33   # cosine distance (similarity >= 0.67)
 
 
-def get_conn():
-    return psycopg2.connect(
-        host=os.environ["SUPABASE_HOST"],
-        port=os.environ["SUPABASE_PORT"],
-        dbname=os.environ["SUPABASE_DB"],
-        user=os.environ["SUPABASE_USER"],
-        password=os.environ["SUPABASE_PASSWORD"],
-        sslmode="require"
+def get_client():
+    """Create a Supabase client (HTTPS on port 443 — works on corporate networks)."""
+    return create_client(
+        os.environ["SUPABASE_URL"],
+        os.environ["SUPABASE_SERVICE_KEY"],
     )
-    print("Connected to Supabase!")
 
 
 # ── Jaccard ──────────────────────────────────────────────────────────────────
@@ -67,19 +62,18 @@ def build_jaccard_keywords(article: dict) -> list[str]:
 
 # ── Dedup ─────────────────────────────────────────────────────────────────────
 
-def url_exists(conn, url: str) -> bool:
-    with conn.cursor() as cur:
-        cur.execute("select 1 from articles where url_loc = %s", (url,))
-        return cur.fetchone() is not None
+def url_exists(sb, url: str) -> bool:
+    result = sb.table("articles").select("url_loc").eq("url_loc", url).limit(1).execute()
+    return len(result.data) > 0
 
 
 # ── Group matching ────────────────────────────────────────────────────────────
 
-def find_matching_group(conn, jaccard_kws: list[str], embedding: list[float]) -> tuple[int | None, dict]:
+def find_matching_group(sb, jaccard_kws: list[str], embedding: list[float]) -> tuple[int | None, dict]:
     """
     1. Pull all active groups.
     2. Jaccard pre-filter.
-    3. Vector similarity on survivors.
+    3. Vector similarity on survivors (via RPC).
     Returns (group_id, debug_data).
     """
     debug_data = {
@@ -87,13 +81,12 @@ def find_matching_group(conn, jaccard_kws: list[str], embedding: list[float]) ->
         "vector_phase": {"performed": False, "threshold": COSINE_THRESHOLD, "best_match": None}
     }
 
-    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute("""
-            select id, group_keywords
-            from article_groups
-            where expires_at > now()
-        """)
-        active_groups = cur.fetchall()
+    # Fetch active groups via PostgREST
+    result = sb.table("article_groups") \
+        .select("id, group_keywords") \
+        .gt("expires_at", "now()") \
+        .execute()
+    active_groups = result.data
 
     scores = []
     for g in active_groups:
@@ -109,22 +102,20 @@ def find_matching_group(conn, jaccard_kws: list[str], embedding: list[float]) ->
     if not debug_data["jaccard_phase"]["candidate_ids"]:
         return None, debug_data
 
-    # Vector check against anchor embedding (immutable, no drift)
+    # Vector check via RPC (anchor embedding, immutable, no drift)
     debug_data["vector_phase"]["performed"] = True
-    with conn.cursor() as cur:
-        cur.execute("""
-            select id, anchor_embedding <=> %s::vector as dist
-            from article_groups
-            where id = any(%s)
-            order by dist
-            limit 1
-        """, (embedding, debug_data["jaccard_phase"]["candidate_ids"]))
-        row = cur.fetchone()
+    result = sb.rpc("match_group", {
+        "query_embedding": embedding,
+        "candidate_ids": debug_data["jaccard_phase"]["candidate_ids"]
+    }).execute()
 
-    if not row:
+    if not result.data:
         return None, debug_data
 
-    group_id, dist = row
+    row = result.data[0]
+    group_id = row["group_id"]
+    dist = row["dist"]
+
     debug_data["vector_phase"]["best_match"] = {
         "group_id": group_id,
         "distance": round(float(dist), 4)
@@ -136,72 +127,44 @@ def find_matching_group(conn, jaccard_kws: list[str], embedding: list[float]) ->
     return None, debug_data
 
 
-def update_group(conn, group_id: int, jaccard_kws: list[str]):
-    """Update group metadata. Anchor embedding is never modified."""
-    with conn.cursor() as cur:
-        cur.execute("""
-            update article_groups set
-                article_count   = article_count + 1,
-                group_keywords  = (
-                    select array_agg(distinct kw)
-                    from unnest(group_keywords || %s::text[]) as kw
-                ),
-                last_updated_at = now(),
-                expires_at      = now() + interval '48 hours'
-            where id = %s
-        """, (jaccard_kws, group_id))
-    conn.commit()
+def update_group(sb, group_id: int, jaccard_kws: list[str]):
+    """Update group metadata via RPC. Anchor embedding is never modified."""
+    sb.rpc("update_group_metadata", {
+        "target_group_id": group_id,
+        "new_keywords": jaccard_kws
+    }).execute()
 
 
-def create_group(conn, embedding: list[float], jaccard_kws: list[str]) -> int:
-    """Create a new group. The first article's embedding becomes the immutable anchor."""
-    with conn.cursor() as cur:
-        cur.execute("""
-            insert into article_groups
-                (anchor_embedding, group_keywords, article_count, expires_at)
-            values
-                (%s::vector, %s, 1, now() + interval '48 hours')
-            returning id
-        """, (embedding, jaccard_kws))
-        group_id = cur.fetchone()[0]
-    conn.commit()
-    return group_id
+def create_group(sb, embedding: list[float], jaccard_kws: list[str]) -> int:
+    """Create a new group via RPC. The first article's embedding becomes the immutable anchor."""
+    result = sb.rpc("create_group_with_anchor", {
+        "p_embedding": embedding,
+        "p_keywords": jaccard_kws
+    }).execute()
+    return result.data
 
 
 # ── Insert article ────────────────────────────────────────────────────────────
 
-def insert_article(conn, article: dict, source_key: str,
+def insert_article(sb, article: dict, source_key: str,
                    embedding: list[float], jaccard_kws: list[str], group_id: int):
     news = article.get("news", {}) or {}
     meta = article.get("meta", {}) or {}
 
-    # Postgres can't cast '' to timestamptz — convert to None
+    # Convert empty strings to None for timestamps
     nullif = lambda v: v if v else None
 
-    with conn.cursor() as cur:
-        cur.execute("""
-            insert into articles (
-                source_id, group_id, url_loc, lastmod, publication_date,
-                title, keywords, jaccard_keywords, meta_keywords,
-                image_loc, content, embedding
-            ) values (
-                %s, %s, %s, %s::timestamptz, %s::timestamptz,
-                %s, %s, %s, %s,
-                %s, %s, %s::vector
-            )
-            on conflict (url_loc) do nothing
-        """, (
-            SOURCE_IDS[source_key],
-            group_id,
-            article.get("url_loc"),
-            nullif(article.get("lastmod")),
-            nullif(news.get("publication_date")),
-            news.get("title"),
-            news.get("keywords") or [],
-            jaccard_kws,
-            meta.get("keywords") or "",
-            article.get("image_loc"),
-            article.get("content"),
-            embedding,
-        ))
-    conn.commit()
+    sb.rpc("insert_article_with_embedding", {
+        "p_source_id": SOURCE_IDS[source_key],
+        "p_group_id": group_id,
+        "p_url_loc": article.get("url_loc"),
+        "p_lastmod": nullif(article.get("lastmod")),
+        "p_publication_date": nullif(news.get("publication_date")),
+        "p_title": news.get("title"),
+        "p_keywords": news.get("keywords") or [],
+        "p_jaccard_keywords": jaccard_kws,
+        "p_meta_keywords": meta.get("keywords") or "",
+        "p_image_loc": article.get("image_loc"),
+        "p_content": article.get("content"),
+        "p_embedding": embedding,
+    }).execute()
