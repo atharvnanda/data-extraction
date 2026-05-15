@@ -1,19 +1,20 @@
 import os
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Response
-from api.dependencies import get_supabase_client
+from api.dependencies import get_db_connection
 from api.models.responses import HealthResponse, HealthChecks
 
 router = APIRouter(tags=["Health"])
 
 
 @router.get("/health", response_model=HealthResponse)
-def health_check(response: Response, sb=Depends(get_supabase_client)):
+def health_check(response: Response, conn=Depends(get_db_connection)):
     """Liveness + readiness check for scheduler/load balancer."""
     db_status = "ok"
     try:
-        # Cheap query to verify Supabase connectivity
-        sb.table("sources").select("id").limit(1).execute()
+        # Cheap query to verify DB connectivity
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
     except Exception as e:
         db_status = f"error: {e}"
 

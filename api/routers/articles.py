@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from api.dependencies import get_supabase_client
+from api.dependencies import get_db_connection
 from api.models.responses import (
     ArticlesResponse, ArticleItem,
     GroupsResponse, GroupItem, GroupArticle,
@@ -11,6 +11,8 @@ router = APIRouter(prefix="/articles", tags=["Articles"])
 SOURCE_NAMES = {1: "news18", 2: "toi", 3: "ht", 4: "indianexpress", 6: "zeenews", 7: "ndtv"}
 
 
+import psycopg2.extras
+
 # ── GET /articles/groups ──────────────────────────────────────────────────────
 
 @router.get("/groups", response_model=GroupsResponse)
@@ -18,61 +20,66 @@ def list_groups(
     limit: int = Query(20, ge=1, le=100),
     page: int = Query(1, ge=1),
     active_only: bool = Query(True),
-    sb=Depends(get_supabase_client),
+    conn=Depends(get_db_connection),
 ):
     """List article groups (clustered topics). Primary editorial endpoint.
     Ordered by last_updated_at DESC. Includes a preview of member articles.
     """
-    # Build base query
-    query = sb.table("article_groups").select("*", count="exact")
-
-    if active_only:
-        query = query.gt("expires_at", "now()")
-
-    query = query.order("last_updated_at", desc=True)
-
-    # Pagination
     offset = (page - 1) * limit
-    result = query.range(offset, offset + limit - 1).execute()
 
-    groups = []
-    for g in result.data:
-        group_id = g["id"]
+    # Build WHERE clause
+    where_clause = "WHERE expires_at > now()" if active_only else ""
 
-        # Fetch top 3 articles as preview
-        articles_result = (
-            sb.table("articles")
-            .select("id, title, source_id, group_id, url_loc, publication_date")
-            .eq("group_id", group_id)
-            .order("id", desc=True)
-            .limit(3)
-            .execute()
-        )
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        # Get total count
+        cur.execute(f"SELECT COUNT(*) as count FROM article_groups {where_clause}")
+        total = cur.fetchone()["count"]
 
-        preview = [
-            GroupArticle(
-                id=a["id"],
-                title=a.get("title"),
-                url_loc=a.get("url_loc"),
-                source=SOURCE_NAMES.get(a.get("source_id"), str(a.get("source_id"))),
-                group_id=a.get("group_id"),
-                publication_date=a.get("publication_date"),
-            )
-            for a in articles_result.data
-        ]
+        # Get groups with pagination
+        cur.execute(f"""
+            SELECT * FROM article_groups 
+            {where_clause} 
+            ORDER BY last_updated_at DESC 
+            LIMIT %s OFFSET %s
+        """, (limit, offset))
+        result_groups = cur.fetchall()
 
-        topic_label = preview[0].title if preview and preview[0].title else ""
+        groups = []
+        for g in result_groups:
+            group_id = g["id"]
 
-        groups.append(GroupItem(
-            group_id=group_id,
-            topic_label=topic_label,
-            article_count=g.get("article_count", 0),
-            last_updated_at=g.get("last_updated_at"),
-            expires_at=g.get("expires_at"),
-            articles=preview,
-        ))
+            # Fetch top 3 articles as preview
+            cur.execute("""
+                SELECT id, title, source_id, group_id, url_loc, publication_date
+                FROM articles
+                WHERE group_id = %s
+                ORDER BY id DESC
+                LIMIT 3
+            """, (group_id,))
+            articles_data = cur.fetchall()
 
-    total = result.count if result.count is not None else len(groups)
+            preview = [
+                GroupArticle(
+                    id=a["id"],
+                    title=a.get("title"),
+                    url_loc=a.get("url_loc"),
+                    source=SOURCE_NAMES.get(a.get("source_id"), str(a.get("source_id"))),
+                    group_id=a.get("group_id"),
+                    publication_date=a.get("publication_date").isoformat() if a.get("publication_date") else None,
+                )
+                for a in articles_data
+            ]
+
+            topic_label = preview[0].title if preview and preview[0].title else ""
+
+            groups.append(GroupItem(
+                group_id=group_id,
+                topic_label=topic_label,
+                article_count=g.get("article_count", 0),
+                last_updated_at=g.get("last_updated_at").isoformat() if g.get("last_updated_at") else None,
+                expires_at=g.get("expires_at").isoformat() if g.get("expires_at") else None,
+                articles=preview,
+            ))
 
     return GroupsResponse(groups=groups, total=total, page=page, limit=limit)
 
@@ -80,30 +87,24 @@ def list_groups(
 # ── GET /articles/groups/{group_id} ──────────────────────────────────────────
 
 @router.get("/groups/{group_id}", response_model=GroupDetailResponse)
-def get_group(group_id: int, sb=Depends(get_supabase_client)):
+def get_group(group_id: int, conn=Depends(get_db_connection)):
     """Fetch one group + all its member articles."""
-    # Fetch group
-    group_result = (
-        sb.table("article_groups")
-        .select("*")
-        .eq("id", group_id)
-        .limit(1)
-        .execute()
-    )
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        # Fetch group
+        cur.execute("SELECT * FROM article_groups WHERE id = %s", (group_id,))
+        g = cur.fetchone()
 
-    if not group_result.data:
-        raise HTTPException(status_code=404, detail=f"Group {group_id} not found")
+        if not g:
+            raise HTTPException(status_code=404, detail=f"Group {group_id} not found")
 
-    g = group_result.data[0]
-
-    # Fetch all articles in this group
-    articles_result = (
-        sb.table("articles")
-        .select("id, title, url_loc, source_id, group_id, publication_date")
-        .eq("group_id", group_id)
-        .order("id", desc=True)
-        .execute()
-    )
+        # Fetch all articles in this group
+        cur.execute("""
+            SELECT id, title, url_loc, source_id, group_id, publication_date
+            FROM articles
+            WHERE group_id = %s
+            ORDER BY id DESC
+        """, (group_id,))
+        articles_data = cur.fetchall()
 
     articles = [
         GroupArticle(
@@ -112,9 +113,9 @@ def get_group(group_id: int, sb=Depends(get_supabase_client)):
             url_loc=a.get("url_loc"),
             source=SOURCE_NAMES.get(a.get("source_id"), str(a.get("source_id"))),
             group_id=a.get("group_id"),
-            publication_date=a.get("publication_date"),
+            publication_date=a.get("publication_date").isoformat() if a.get("publication_date") else None,
         )
-        for a in articles_result.data
+        for a in articles_data
     ]
     
     topic_label = articles[0].title if articles and articles[0].title else ""
@@ -123,8 +124,8 @@ def get_group(group_id: int, sb=Depends(get_supabase_client)):
         group_id=g["id"],
         topic_label=topic_label,
         article_count=g.get("article_count", 0),
-        last_updated_at=g.get("last_updated_at"),
-        expires_at=g.get("expires_at"),
+        last_updated_at=g.get("last_updated_at").isoformat() if g.get("last_updated_at") else None,
+        expires_at=g.get("expires_at").isoformat() if g.get("expires_at") else None,
         articles=articles,
     )
 
@@ -138,33 +139,49 @@ def list_articles(
     source: str | None = Query(None, description="Filter by source key (e.g. 'news18')"),
     group_id: int | None = Query(None, description="Filter by group ID"),
     from_date: str | None = Query(None, description="Filter articles published after this date (ISO format)"),
-    sb=Depends(get_supabase_client),
+    conn=Depends(get_db_connection),
 ):
     """Query saved articles with filtering. Secondary endpoint for debugging."""
-    query = (
-        sb.table("articles")
-        .select("id, title, url_loc, source_id, group_id, publication_date, image_loc", count="exact")
-    )
+    conditions = []
+    params = []
 
-    # Apply filters
     if source:
         source_id_map = {v: k for k, v in SOURCE_NAMES.items()}
         sid = source_id_map.get(source)
         if sid is None:
             raise HTTPException(status_code=400, detail=f"Unknown source: {source}")
-        query = query.eq("source_id", sid)
+        conditions.append("source_id = %s")
+        params.append(sid)
 
     if group_id is not None:
-        query = query.eq("group_id", group_id)
+        conditions.append("group_id = %s")
+        params.append(group_id)
 
     if from_date:
-        query = query.gte("publication_date", from_date)
+        conditions.append("publication_date >= %s")
+        params.append(from_date)
 
-    query = query.order("id", desc=True)
+    where_clause = ""
+    if conditions:
+        where_clause = "WHERE " + " AND ".join(conditions)
 
-    # Pagination
     offset = (page - 1) * limit
-    result = query.range(offset, offset + limit - 1).execute()
+
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        # Get total count
+        cur.execute(f"SELECT COUNT(*) as count FROM articles {where_clause}", params)
+        total = cur.fetchone()["count"]
+
+        # Get articles
+        query = f"""
+            SELECT id, title, url_loc, source_id, group_id, publication_date, image_loc
+            FROM articles
+            {where_clause}
+            ORDER BY id DESC
+            LIMIT %s OFFSET %s
+        """
+        cur.execute(query, params + [limit, offset])
+        articles_data = cur.fetchall()
 
     articles = [
         ArticleItem(
@@ -173,12 +190,10 @@ def list_articles(
             url_loc=a.get("url_loc"),
             source_id=a.get("source_id"),
             group_id=a.get("group_id"),
-            publication_date=a.get("publication_date"),
+            publication_date=a.get("publication_date").isoformat() if a.get("publication_date") else None,
             image_loc=a.get("image_loc"),
         )
-        for a in result.data
+        for a in articles_data
     ]
-
-    total = result.count if result.count is not None else len(articles)
 
     return ArticlesResponse(articles=articles, total=total, page=page, limit=limit)

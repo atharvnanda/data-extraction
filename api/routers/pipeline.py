@@ -3,7 +3,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
-from api.dependencies import get_supabase_client
+from api.dependencies import get_db_connection
 from api.models.requests import PipelineRunRequest
 from api.models.responses import (
     PipelineRunResponse, RunSummary, SourceStats,
@@ -32,28 +32,28 @@ router = APIRouter(prefix="/pipeline", tags=["Pipeline"])
 
 # ── POST /pipeline/run ────────────────────────────────────────────────────────
 
-def _process_article(sb, article: dict, source_key: str, run_report: list) -> str:
+def _process_article(conn, article: dict, source_key: str, run_report: list) -> str:
     """Process one article. Returns action: 'inserted', 'skipped', or raises."""
     url = article.get("url_loc")
     if not url:
         return "skipped"
 
-    if url_exists(sb, url):
+    if url_exists(conn, url):
         return "skipped"
 
     embedding   = embed_text(build_embed_input(article))
     jaccard_kws = build_jaccard_keywords(article)
 
-    group_id, debug_data = find_matching_group(sb, jaccard_kws, embedding)
+    group_id, debug_data = find_matching_group(conn, jaccard_kws, embedding)
 
     action = "new_group"
     if group_id:
-        update_group(sb, group_id, jaccard_kws)
+        update_group(conn, group_id, jaccard_kws)
         action = "grouped"
     else:
-        group_id = create_group(sb, embedding, jaccard_kws)
+        group_id = create_group(conn, embedding, jaccard_kws)
 
-    insert_article(sb, article, source_key, embedding, jaccard_kws, group_id)
+    insert_article(conn, article, source_key, embedding, jaccard_kws, group_id)
 
     run_report.append({
         "article": {
@@ -71,7 +71,7 @@ def _process_article(sb, article: dict, source_key: str, run_report: list) -> st
 
 
 @router.post("/run", response_model=PipelineRunResponse)
-def run_pipeline(body: PipelineRunRequest = PipelineRunRequest(), sb=Depends(get_supabase_client)):
+def run_pipeline(body: PipelineRunRequest = PipelineRunRequest(), conn=Depends(get_db_connection)):
     """Main trigger — runs the full extraction pipeline.
     This is the endpoint the scheduler calls every X minutes.
     """
@@ -105,7 +105,7 @@ def run_pipeline(body: PipelineRunRequest = PipelineRunRequest(), sb=Depends(get
 
         for article in articles:
             try:
-                action = _process_article(sb, article, source_key, run_report)
+                action = _process_article(conn, article, source_key, run_report)
                 if action == "skipped":
                     stats.skipped += 1
                 elif action == "new_group":
@@ -115,6 +115,7 @@ def run_pipeline(body: PipelineRunRequest = PipelineRunRequest(), sb=Depends(get
                     stats.inserted += 1
                     summary.articles_grouped += 1
             except Exception:
+                conn.rollback() # Rollback on error so subsequent articles can process
                 stats.errors += 1
 
         per_source[source_key] = stats

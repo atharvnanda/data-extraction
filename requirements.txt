@@ -5,7 +5,6 @@ cohere
 psycopg2-binary
 python-dotenv
 curl_cffi
-supabase
 fastapi
 uvicorn[standard]
 pydantic-settings
