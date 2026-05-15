@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from api.dependencies import get_supabase_client
 from api.models.responses import (
     ArticlesResponse, ArticleItem,
-    GroupsResponse, GroupItem, ArticlePreview,
+    GroupsResponse, GroupItem, GroupArticle,
     GroupDetailResponse,
 )
 
@@ -42,7 +42,7 @@ def list_groups(
         # Fetch top 3 articles as preview
         articles_result = (
             sb.table("articles")
-            .select("title, source_id, url_loc, publication_date")
+            .select("id, title, source_id, group_id, url_loc, publication_date")
             .eq("group_id", group_id)
             .order("id", desc=True)
             .limit(3)
@@ -50,22 +50,26 @@ def list_groups(
         )
 
         preview = [
-            ArticlePreview(
+            GroupArticle(
+                id=a["id"],
                 title=a.get("title"),
-                source_id=a.get("source_id"),
                 url_loc=a.get("url_loc"),
+                source=SOURCE_NAMES.get(a.get("source_id"), str(a.get("source_id"))),
+                group_id=a.get("group_id"),
                 publication_date=a.get("publication_date"),
             )
             for a in articles_result.data
         ]
 
+        topic_label = preview[0].title if preview and preview[0].title else ""
+
         groups.append(GroupItem(
             group_id=group_id,
+            topic_label=topic_label,
             article_count=g.get("article_count", 0),
             last_updated_at=g.get("last_updated_at"),
             expires_at=g.get("expires_at"),
-            group_keywords=g.get("group_keywords"),
-            articles_preview=preview,
+            articles=preview,
         ))
 
     total = result.count if result.count is not None else len(groups)
@@ -95,31 +99,32 @@ def get_group(group_id: int, sb=Depends(get_supabase_client)):
     # Fetch all articles in this group
     articles_result = (
         sb.table("articles")
-        .select("id, title, url_loc, source_id, group_id, publication_date, image_loc")
+        .select("id, title, url_loc, source_id, group_id, publication_date")
         .eq("group_id", group_id)
         .order("id", desc=True)
         .execute()
     )
 
     articles = [
-        ArticleItem(
+        GroupArticle(
             id=a["id"],
             title=a.get("title"),
             url_loc=a.get("url_loc"),
-            source_id=a.get("source_id"),
+            source=SOURCE_NAMES.get(a.get("source_id"), str(a.get("source_id"))),
             group_id=a.get("group_id"),
             publication_date=a.get("publication_date"),
-            image_loc=a.get("image_loc"),
         )
         for a in articles_result.data
     ]
+    
+    topic_label = articles[0].title if articles and articles[0].title else ""
 
     return GroupDetailResponse(
         group_id=g["id"],
+        topic_label=topic_label,
         article_count=g.get("article_count", 0),
         last_updated_at=g.get("last_updated_at"),
         expires_at=g.get("expires_at"),
-        group_keywords=g.get("group_keywords"),
         articles=articles,
     )
 

@@ -74,19 +74,21 @@ class ArticlesResponse(BaseModel):
 
 # ── Groups ────────────────────────────────────────────────────────────────────
 
-class ArticlePreview(BaseModel):
+class GroupArticle(BaseModel):
+    id: int
     title: str | None = None
-    source_id: int | None = None
     url_loc: str | None = None
+    source: str | None = None
+    group_id: int | None = None
     publication_date: str | None = None
 
 class GroupItem(BaseModel):
     group_id: int
+    topic_label: str | None = None
     article_count: int
     last_updated_at: str | None = None
     expires_at: str | None = None
-    group_keywords: list[str] | None = None
-    articles_preview: list[ArticlePreview] = []
+    articles: list[GroupArticle] = []
 
 class GroupsResponse(BaseModel):
     groups: list[GroupItem]
@@ -96,8 +98,8 @@ class GroupsResponse(BaseModel):
 
 class GroupDetailResponse(BaseModel):
     group_id: int
+    topic_label: str | None = None
     article_count: int
     last_updated_at: str | None = None
     expires_at: str | None = None
-    group_keywords: list[str] | None = None
-    articles: list[ArticleItem] = []
+    articles: list[GroupArticle] = []
